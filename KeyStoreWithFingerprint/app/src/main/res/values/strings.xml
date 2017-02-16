@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">KeyStoreWithFingerprint</string>
+    <string name="key_result">Generated key information</string>
+    <string name="button_test">Test</string>
+</resources>
