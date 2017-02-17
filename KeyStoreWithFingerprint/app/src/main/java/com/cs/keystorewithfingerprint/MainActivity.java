@@ -1,10 +1,16 @@
 package com.cs.keystorewithfingerprint;
 
 import android.Manifest;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.Dialog;
+import android.app.DialogFragment;
 import android.app.KeyguardManager;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.pm.PackageManager;
 import android.hardware.fingerprint.FingerprintManager;
+import android.os.CancellationSignal;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyPermanentlyInvalidatedException;
 import android.security.keystore.KeyProperties;
@@ -18,6 +24,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.KeyStore;
@@ -35,6 +42,7 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.SecretKey;
 
+
 public class MainActivity extends AppCompatActivity {
     public static final String TAG = "keyStoreWithFingerprint";
     private static final int FINGERPRINT_PERMISSION_REQUEST_CODE = 0;
@@ -46,6 +54,7 @@ public class MainActivity extends AppCompatActivity {
     private FingerprintManager mFingerprintManager = null ;
     private KeyguardManager mKeyguardManager = null ;
     private Cipher mCipher = null ;
+    private FingerprintAuthDialogFragment mFingerprintAuthDialogFragment = null;
 
 
     @Override
@@ -78,7 +87,6 @@ public class MainActivity extends AppCompatActivity {
                     mBtnTest.setEnabled(false);
                     return ;
                 }
-
             }catch (SecurityException e){
                 Log.e(TAG,"has enrolled fingerprints need permission") ;
                 e.printStackTrace();
@@ -87,12 +95,10 @@ public class MainActivity extends AppCompatActivity {
             Log.e(TAG,"Permission denied") ;
         }
     }
-
     @Override
     protected void onStart() {
         super.onStart();
     }
-
     private class TestListener implements View.OnClickListener {
         @Override
         public void onClick(View v) {
@@ -103,9 +109,11 @@ public class MainActivity extends AppCompatActivity {
                     if (tryEncrypt()) {
                         Log.e(TAG,"test failed ,Key accessible without auth") ;
                     }else {
-
+                        Log.i(TAG,"showAuthenticate dialog") ;
+                        mFingerprintAuthDialogFragment = new FingerprintAuthDialogFragment() ;
+                        mFingerprintAuthDialogFragment.setActivity(MainActivity.this) ;
+                        mFingerprintAuthDialogFragment.show(getFragmentManager(),"fingerprint_dialog");
                     }
-
                     break;
             }
         }
@@ -127,7 +135,9 @@ public class MainActivity extends AppCompatActivity {
             Log.i(TAG,"444444444444444444444444") ;
             SecretKey secreteKey = keyGenerator.generateKey() ;
             Log.i(TAG,"555555555555555555555555555555") ;
-            Log.i(TAG,"secretKey = "+secreteKey.toString()) ;
+            if (null != secreteKey) {
+                Log.i(TAG,"secretKey = "+secreteKey.getAlgorithm()+"  "+secreteKey.getEncoded()+"  "+secreteKey.getFormat()) ;
+            }
         }catch (InvalidAlgorithmParameterException e){
             Log.e(TAG,"InvalidAlgorithmParameterException Create key failed") ;
             throw  new RuntimeException("create key failed") ;
@@ -176,11 +186,15 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
             return true ;
-        }catch (BadPaddingException | IllegalBlockSizeException e){
-            Log.e(TAG,"encryption failed") ;
+        }catch (IllegalBlockSizeException e){
+            Log.e(TAG,"IllegalBlockSizeException failed") ;
             return false ;
+        }catch (BadPaddingException e){
+            Log.e(TAG,"BadPaddingException encryption failed ") ;
+            return false ;
+
         }catch(KeyPermanentlyInvalidatedException e) {
-            Log.w(TAG,"Encrypt key invalidated") ;
+            Log.w(TAG,"KeyPermanentlyInvalidatedException key invalidated") ;
             Toast.makeText(this,"The key has been invalidated, please try again",Toast.LENGTH_LONG).show() ;
             createKey();
             return  false ;
@@ -203,4 +217,106 @@ public class MainActivity extends AppCompatActivity {
         mFingerprintManager = (FingerprintManager) getSystemService(Context.FINGERPRINT_SERVICE) ;
         mKeyguardManager = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE) ;
     }
+
+    public static  class FingerprintAuthDialogFragment extends DialogFragment {
+        private WeakReference<Activity> mRef = null;
+
+        private CancellationSignal mCancellationSignal;
+        private FingerprintManagerCallback mFingerprintManagerCallback;
+        private boolean mSelfCanceld;
+
+
+        class FingerprintManagerCallback extends FingerprintManager.AuthenticationCallback {
+            @Override
+            public void onAuthenticationError(int errorCode, CharSequence errString) {
+                if (!mSelfCanceld) {
+                    if (null != mRef) {
+                        Toast.makeText(mRef.get(), "errorCode = " + errorCode + " " + errString.toString(), Toast.LENGTH_SHORT).show();
+                    }
+
+                }
+
+            }
+
+            @Override
+            public void onAuthenticationFailed() {
+                if (null == mRef) {
+                    return;
+                }
+                Toast.makeText(mRef.get(), "Authenticate failed", Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onAuthenticationHelp(int helpCode, CharSequence helpString) {
+                if (null == mRef) return;
+                Toast.makeText(mRef.get(), "helpcode = " + helpCode + " " + helpString.toString(), Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onAuthenticationSucceeded(FingerprintManager.AuthenticationResult result) {
+                if (null != mRef) {
+                    MainActivity activity = (MainActivity) mRef.get();
+                    if (activity != null || activity.tryEncrypt()) {
+                        Toast.makeText(activity, "TEST PASS", Toast.LENGTH_LONG).show();
+                        activity.mFingerprintAuthDialogFragment.dismiss();
+
+                    } else {
+                        Toast.makeText(activity, "Test Fail  Key not accessible after auth", Toast.LENGTH_LONG).show();
+                    }
+                }
+
+            }
+        }
+
+
+        @Override
+        public void onDismiss(DialogInterface dialog) {
+            super.onDismiss(dialog);
+            mCancellationSignal = null ;
+            mSelfCanceld = true ;
+        }
+
+        public void setActivity(Activity activity) {
+            if (null == activity) {
+                return ;
+            }
+            if ( mRef == null){
+                mRef = new WeakReference<>(activity) ;
+            }
+        }
+        public Activity getActivityContext() {
+            if (null == mRef) {
+                return null ;
+            }
+            return mRef.get() ;
+
+        }
+
+
+        @Override
+        public Dialog onCreateDialog(Bundle savedInstanceState) {
+            MainActivity mainActivity = (MainActivity) getActivityContext() ;
+            if (null == mainActivity) {
+                Log.e(TAG,"onCreateDialog failed ,mainActivity") ;
+                return null ;
+            }
+            mCancellationSignal = new CancellationSignal() ;
+            mSelfCanceld = false ;
+            mFingerprintManagerCallback = new FingerprintManagerCallback() ;
+            if (null != mainActivity.mFingerprintManager) {
+                try{
+                    mainActivity.mFingerprintManager.authenticate(new FingerprintManager.CryptoObject(mainActivity.mCipher),
+                            mCancellationSignal,0,mFingerprintManagerCallback,null);
+                }catch (SecurityException e){
+                    throw new RuntimeException("securityException") ;
+                }
+
+                AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
+                builder.setMessage("Fingerprint Authentication ");
+                return builder.create() ;
+            }
+            return null ;
+        }
+    }
+
 }
